@@ -12,50 +12,131 @@
 
 #include "../philo.h"
 
-int	init_philosophers(t_philo **philos, char **argv)
+int init_data(t_data *data, char **argv)
 {
-	int	num_philos;
+	int i;
 
-	num_philos = atoi(argv[1]);
-	if (!*philos)
+	data->num_philos = ft_atoi(argv[1]);
+	data->time_to_die = ft_atoi(argv[2]);
+	data->time_to_eat = ft_atoi(argv[3]);
+	data->time_to_sleep = ft_atoi(argv[4]);
+	data->must_eat_count = -1;
+	if (argv[5])
+		data->must_eat_count = ft_atoi(argv[5]);
+	data->someone_died = 0;
+	data->all_ate = 0;
+	data->start_time = get_current_time();
+	if (pthread_mutex_init(&data->print_mutex, NULL))
 		return (0);
-	for (int i = 0; i < num_philos; i++)
+	if (pthread_mutex_init(&data->death_mutex, NULL))
+		return (0);
+	if (pthread_mutex_init(&data->meal_mutex, NULL))
+		return (0);
+	data->forks = malloc(sizeof(pthread_mutex_t) * data->num_philos);
+	if (!data->forks)
+		return (0);
+	i = 0;
+	while (i < data->num_philos)
 	{
-		(*philos)[i].id = i + 1;
-		(*philos)[i].time_to_die = (atol(argv[2]) * 1000);
-		(*philos)[i].time_to_eat = (atol(argv[3]) * 1000);
-		(*philos)[i].time_to_sleep = (atol(argv[4]) * 1000);
-		pthread_mutex_init(&(*philos)[i].mutex, NULL);
-		pthread_mutex_init(&(*philos)[i].mutex_forks, NULL);
+		if (pthread_mutex_init(&data->forks[i], NULL))
+			return (0);
+		i++;
 	}
 	return (1);
 }
 
-void	write_philosophers(t_philo *philos, int num_philos)
+int init_philosophers(t_data *data)
 {
-	for (int i = 0; i < num_philos; i++)
+	int i;
+
+	data->philos = malloc(sizeof(t_philo) * data->num_philos);
+	if (!data->philos)
+		return (0);
+
+	i = 0;
+	while (i < data->num_philos)
 	{
-		printf("Philosopher %d: Time to die: %ld, Time to eat: %ld,Time to sleep: %ld\n", philos[i].id, philos[i].time_to_die, philos[i].time_to_eat, philos[i].time_to_sleep);
+		data->philos[i].id = i + 1;
+		data->philos[i].meals_eaten = 0;
+		data->philos[i].last_meal_time = data->start_time;
+		data->philos[i].is_dead = 0;
+		data->philos[i].left_fork = &data->forks[i];
+		data->philos[i].right_fork = &data->forks[(i + 1) % data->num_philos];
+		data->philos[i].data = data;
+		i++;
 	}
+	return (1);
 }
 
-int	main(int argc, char **argv)
+void cleanup_data(t_data *data)
 {
-	t_philo	*philos;
+	int i;
 
-	if (argc < 5 || argc > 6)
+	if (data->forks)
 	{
-		fprintf(stderr, "Usage:%s num_philos time_to_die time_to_eat time_to_sleep [num_meals]\n",argv[0]);
+		i = 0;
+		while (i < data->num_philos)
+		{
+			pthread_mutex_destroy(&data->forks[i]);
+			i++;
+		}
+		free(data->forks);
+	}
+	if (data->philos)
+		free(data->philos);
+	pthread_mutex_destroy(&data->print_mutex);
+	pthread_mutex_destroy(&data->death_mutex);
+	pthread_mutex_destroy(&data->meal_mutex);
+}
+
+int start_simulation(t_data *data)
+{
+	int i;
+	pthread_t monitor;
+
+	i = 0;
+	while (i < data->num_philos)
+	{
+		if (pthread_create(&data->philos[i].thread, NULL,
+						   philosopher_routine, &data->philos[i]))
+			return (0);
+		i++;
+	}
+	if (pthread_create(&monitor, NULL, monitor_routine, data))
+		return (0);
+	i = 0;
+	while (i < data->num_philos)
+	{
+		pthread_join(data->philos[i].thread, NULL);
+		i++;
+	}
+	pthread_join(monitor, NULL);
+	return (1);
+}
+
+int main(int argc, char **argv)
+{
+	t_data data;
+
+	if (!validate_args(argc, argv))
+		return (1);
+	if (!init_data(&data, argv))
+	{
+		printf("Error: Failed to initialize data\n");
 		return (1);
 	}
-	write(1, "Initializing philosophers and forks...\n", 40);
-	philos = malloc(sizeof(t_philo) * atoi(argv[1]));
-	write(1, "Allocating forks...\n", 21);
-	init_philosophers(&philos, argv);
-	write(1, "Philosophers and forks initialized successfully.\n", 50);
-	write(1,"Lista de platones\n", 19);
-	write_philosophers(philos, atoi(argv[1]));
-	printf("Philosophers simulation started with %d philosophers.\n", atoi(argv[1]));
-	// Liberar recursos y finalizar el programa adecuadamente.
+	if (!init_philosophers(&data))
+	{
+		printf("Error: Failed to initialize philosophers\n");
+		cleanup_data(&data);
+		return (1);
+	}
+	if (!start_simulation(&data))
+	{
+		printf("Error: Failed to start simulation\n");
+		cleanup_data(&data);
+		return (1);
+	}
+	cleanup_data(&data);
 	return (0);
 }
